@@ -1,0 +1,252 @@
+---
+title: "Area 분산분석 - 종속변수를 평단가로.."
+author: "2023-2학기 통계자료분석 1조 김재현"
+date: "2023-12-06"
+date-modified: "2023-12-21"
+format: 
+  html:
+    mermaid: 
+      theme: neutral
+---
+
+```{r setup, include=FALSE}
+#| label: 사용할 패키지 불러오기
+
+# 사용할 패키지 불러오기
+library(readxl)
+library(dplyr)
+library(DescTools)
+library(agricolae)
+library(tidyverse)
+library(car)
+library(MASS)
+library(ggpubr)
+```
+
+```{r}
+#| label: 데이터 불러오기
+# 데이터 불러오기
+
+rawdata = read_excel("./Team_Assignment/Reyeme2.xls")
+data1 = as.data.frame(rawdata)
+data1$FirstDate = as.Date(as.numeric(as.character(data1$FirstDate)),origin="1899-12-30")
+data1$RC = as.factor(data1$RC)
+
+```
+
+```{r}
+#| label: 데이터 변수 클래스 확인
+
+str(data1)
+```
+
+
+```{r}
+#| label: 결측값 존재 확인
+# 결측값 존재 확인
+
+sum(is.na(data1))
+```
+
+:::{.callout-note}
+결측값 9개 존재.
+:::
+
+```{r}
+#| label: 결측값 있는 행 확인
+# 결측값 있는 행 확인
+
+which(rowSums(is.na(data1)) > 0)
+
+```
+
+:::{.callout-note}
+결측값 중 한개를 제외하곤 모두 UNIT 열 값이다. UNIT는 건물내 특정 주거공간을 나타내는 호수(ex 101호, 102호)이다. Reyem Affiar가 구매하려는 건물의 UNIT는 주어져있지 않기 때문에 Reyem Affiar가 구매하려는 건물 가격을 추정하는데에 UNIT 변수는 사용하지 않을 것으로 예상한다. 나머지 한개의 결측값은 First Date에서 나타났으며, 254행에 있다. FirstDate열은 사용할 예정이므로 254행만 제외한다.
+:::
+
+```{r}
+#| label: data2 = data1의 결측값 있는 행 중 254행 제거
+
+#결측값 있는 행 중 254행 제거
+
+data2 = data1[-254,]
+```
+
+```{r}
+#| label: data3 = data2의 Address 열 나누기 
+#| warning: false
+data3 <- separate(data2, Address, into = c("AddressNo", "AddressName", "Street"), sep = " ")
+```
+
+
+```{r}
+
+#| label: First Date를 연 월 일로 열 나누기
+
+data4 <- separate(data3, FirstDate, into = c("YearF", "MonthF", "DateF"), sep = "-")
+```
+
+```{r}
+
+#| label: 평단가 PrPerI 만들기
+
+data4$PrPerI = data4$SalePrice/data4$Interior
+```
+
+## 분산분석 PrPerI 와 Area
+
+### 등분산성 확인
+
+```{r}
+#| label: data4 그래프를 통한 등분산성 확인 - ggline
+ggpubr::ggline(data4, x = "Area", y = "PrPerI", add = c("mean_sd", "jitter"), 
+       title = "지역별 평단가 PrPerI", ylab ="PrPerI", xlab = "", ggtheme = theme_classic(base_family = "Noto Sans KR") )
+```
+
+plot상으로 봤을 때, Area별로 등분산성이 지켜지지 않고 있다.
+
+### 잔차가 정규분포인지 확인
+
+```{r}
+#| label: 분산분석 M1 정의 M1 = aov(PrPerI ~ Area, data4)
+
+M1 = aov(PrPerI ~ Area, data4)
+anova(M1)
+```
+
+Area에 따라 PrPerI가 달라진다는 사실은 확인되었다.
+
+```{r}
+#| label: M1 잔차분포 확인-정규성 검증
+
+plot(density(M1$residuals),xlab = "",main = "residual distribution", lwd = 2)
+```
+
+잔차는 오른쪽으로 긴 꼬리분포를 갖고 있다. 대칭성이 있다고 볼수 없다.
+
+그러므로 잔차분포가 정규분포에 가깝다고 판단하기 어렵다.
+
+비대칭도가 심하기 때문에 levene test로 등분산성에대한 검정을 진행한다.
+
+```{r}
+#| label: M1에 대한 leveneTest - 등분산성 검정
+
+car::leveneTest(M1) # 디폴트 center = median
+```
+
+p-value가 `1.1e-10 ***`로 귀무가설(등분산성을 만족한다.)를 강력하게 기각하고 있다.
+
+비모수검정?
+
+분산 안정화 변환?
+
+outlier 제거?
+
+outlier 제거 후 다시 등분산성 확인
+
+### outlier 제거
+
+```{r}
+#| label: boxplot 확인
+ri = M1$residuals
+boxplot(ri ~ data4$Area, xlab = "", ylab = "residuals", range= 3, boxwex = 0.4) # boxwex는 상자폭을 0.4배 줄이는 옵션
+```
+
+표준화 혹은 스튜던트화된 잔차는 평균0, 표준편차 1의 분포를 따라야 한다. 그러나 $\pm2$
+이상이라면, mild outlier, $\pm3$ 이상이라면 extreme outlier로 판단한다.
+
+```{r}
+#| label: 외적 스튜던트화된 잔차를 이용하여 mild outlier(2이상) 확인
+
+outliers = abs(rstudent(M1))>2 # 외적 스튜던트화된 잔차의 절대값이 2이상이면 outlier로 판단.
+```
+
+```{r}
+#| label: data5 = data4의 mild outlier 제거
+
+data5 = data4[!outliers,] #outliers가 아닌 행들만 data5에 저장
+```
+
+24개 데이터 제거
+
+### 다시 분산분석 및 등분산성 확인
+
+```{r}
+#| label: data5를 이용한 분산분석 M2 정의
+
+M2 = aov(PrPerI ~ Area, data5)
+anova(M2)
+```
+
+```{r}
+#| label: M2 boxplot 확인
+ri = M2$residuals
+boxplot(ri ~ data5$Area, xlab = "", ylab = "residuals", range= 1.5, boxwex = 0.4) # boxwex는 상자폭을 0.4배 줄이는 옵션
+```
+
+
+
+```{r}
+#| label: data5의 등분산성 그래프 확인 ggline
+ggpubr::ggline(data5, x = "Area", y = "PrPerI", add = c("mean_sd", "jitter"), 
+       title = "지역별 평단가", ylab ="PrPerI", xlab = "", ggtheme = theme_classic(base_family = "Noto Sans KR") )
+```
+
+여전히 Area별로 분포가 크게 다른 것으로 보아 등분산성을 만족하지 않는 것으로 보인다.
+
+```{r}
+#| label: 잔차분포 확인 - 정규성 검증
+
+plot(density(M2$residuals),xlab = "",main = "residual distribution", lwd = 2)
+```
+
+이전과 비교하여 잔차의 분포가 조금 더 정규성을 띄는 것 처럼 보인다. 여전히 비대칭에 가깝다.
+
+그러므로 levene test를 이용하여 등분산성을 검정한다.
+
+```{r}
+#| label: M2에 대한 leveneTest - 등분산성 검정
+
+car::leveneTest(M2) # 디폴트 center = median
+```
+
+이전 levene test에 의한 p값(`6.854e-11 ***`)보다는 p값이 증가하였으나 여전히 낮은 값으로 등분산성을 만족한다는 귀무가설을 기각하고 있다.
+
+#### 비모수검정
+
+```{r}
+#| label: 비모수검정 kruskal.test() - data5 사용
+
+kruskal.test(PrPerI ~ Area, data5)
+```
+
+```{r}
+#| label: Wilcoxon 검정 - 다중 비교 사후검정 (순위기반)
+#| warning: false
+
+pairwise.wilcox.test(data5$PrPerI, data4$Area, p.adjust.method = "none")
+```
+
+비모수 검정을 사용했지만 괜찮은 결과를 얻지 못했다. 결국 E 만 다른 그룹과 다르다는 결과를 얻었을 뿐이다. 
+
+외적 스튜던트화된 잔차(1.5이상)를 사용하여 outlier를 제거한 data5를 이용한 비모수 검정을 진행해보자.
+
+```{r}
+#| label: data5 - 비모수검정 kruskal.test()
+kruskal.test(SalePrice ~ Area, data4)
+```
+
+```{r}
+#| label: data5 - Wilcoxon 검정 - 다중 비교 사후검정 (순위기반)
+#| warning: false
+
+pairwise.wilcox.test(data5$SalePrice, data5$Area,p.adjust.method = "none")
+```
+위 결과를 이용하면
+
+그룹은 다음과 같이 묶을 수 있다.
+
+Zone1 - E
+Zone2 - C,CP,PS,SH
+Zone3 - AG,AH,FP,HS,K,M,N,NW,RA,RS,W
+

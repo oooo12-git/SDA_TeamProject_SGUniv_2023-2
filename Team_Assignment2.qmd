@@ -1,0 +1,193 @@
+---
+title: "통계자료분석 팀프로젝트 - Reyemes Affiar"
+author: "2023-2학기 통계자료분석 1조 김재현"
+date: "2023-12-06"
+date-modified: "2023-12-08"
+format: html
+---
+
+<details>
+<summary>데이터 불러오기부터 Area Code 맞지 않는 행 수정까지 접힘</summary>
+
+```{r setup}
+#| label: 사용할 패키지 불러오기
+#| output: false
+# 사용할 패키지 불러오기
+library(readxl)
+library(dplyr)
+library(DescTools)
+library(agricolae)
+```
+
+```{r}
+#| label: 데이터 불러오기
+# 데이터 불러오기
+
+rawdata = read_excel("./Team_Assignment/Reyeme2.xls",)
+data1 = as.data.frame(rawdata)
+```
+
+```{r}
+#| label: 결측값 존재 확인
+# 결측값 존재 확인
+
+sum(is.na(data1))
+```
+
+:::{.callout-note}
+결측값 8개 존재.
+:::
+
+```{r}
+#| label: 결측값 있는 행 확인
+# 결측값 있는 행 확인
+
+which(rowSums(is.na(data1)) > 0)
+
+```
+
+:::{.callout-note}
+결측값은 모두 UNIT 열 값이다. UNIT는 건물내 특정 주거공간을 나타내는 호수(ex 101호, 102호)이다. Reyem Affiar가 구매하려는 건물의 UNIT는 주어져있지 않기 때문에 Reyem Affiar가 구매하려는 건물 가격을 추정하는데에 UNIT 변수는 사용하지 않을 것으로 예상한다. 그러므로 결측값은 처리하지 않고 최대한 데이터를 보존하고자 한다.
+:::
+
+```{r}
+#| label: 데이터 클래스 확인
+# 각 독립변수의 클래스 확인
+
+summary(data1)
+```
+
+:::{.callout-note}
+UNIT 변수와 함께, 바로 선형회귀분석에 사용할 수 없는 character, Date 클래스를 가진 변수 Area, Address, FirstDate, CloseDate를 제외하고 선형회귀분석을 진행한다.
+:::
+
+```{r}
+#| label: M1 = 모든 변수 사용, M2 = M1에서 UNIT, AREA, Address, FirstDate, CloseDate 제외
+# M1 = 모든 변수 사용, M2 = M1에서 UNIT, AREA, Address, FirstDate, CloseDate 제외
+
+
+M1 = lm(SalePrice ~ .  ,data1)
+M2 = update(M1, . ~ . - Unit - Area -Address - FirstDate - CloseDate)
+summary(M2)
+```
+
+:::{.callout-note}
+
+Sale Price와 직접적으로 관련되어 다른 변수들의 중요성을 가리는 변수인 Price1(FirstPrice), Price2(LastPrice)를 제외한다.
+
+:::
+
+```{r}
+#| label: M3 = M2에서 Price1, Price2 제외
+# M2에서 Price1, Price2 제외, M3 회귀분석 결과확인
+
+
+M3 = update(M2, . ~ . - Price1 - Price2)
+summary(M3)
+```
+
+::: {.callout-important}
+**이제 각 변수를 살펴보면서 논리적으로 변수를 조정하거나, 종속변수(Sale Price)를 예측하는데에 성능을 개선만한 새로운 변수를 추가한다. **
+:::
+
+### Area Code 부터 살펴보면...
+
+일단 Area와 Area Code가 잘못 매칭된 93행과, 101행의 Area Code를 변경해준다.(데이터 오류 수정)
+
+```{r}
+#| label: 데이터 프레임 복사
+# 데이터 프레임 복사(기존 데이터와의 비교를 위해)
+
+data2 = data1
+```
+
+```{r}
+#| label: 잘못 매칭된 AreaCode 변경
+
+# 잘못 매칭된 AreaCode 변경
+
+data2$AreaCode[93] = 10 # N 지역
+data2$AreaCode[101] = 4 # CP 지역
+```
+
+</details>
+
+
+#### Area Code에 대한 분산 분석
+
+각 Area Code의 평균 매매가에 유의한 차이가 있는지 확인해본다.
+
+```{r}
+#| label: A1 = AreaCode와 SalePrice 분산분석
+# A1 = AreaCode와 SalePrice 분산분석
+
+A1 = aov(SalePrice ~ AreaCode, data2)
+anova(A1)
+```
+
+ANOVA 결과 AreaCode별로 평균 SalePrice가 다르다는 것을 확인했다. 그렇다면 사후검정을 통해 어느 AreaCode간에 평균 SalePrice 차이가 있는지 확인이 필요하다.
+
+사후검정 방법 중 검정력이 높고, 그룹간 반복수가 달라도 사용할 수 있는 fisher LSD 검정을 사용했다.
+
+```{r}
+#| label: Fisher LSD를 이용한 사후검정
+# Fisher LSD를 이용한 사후검정
+
+data2$AreaCode = as.factor(data2$AreaCode) 
+#PostHocTest를 하기위해선 AreaCode가 factor형이어야 할 수 있다. 때문에 AreaCode를 factor로 변경한다.
+
+A1 = aov(SalePrice ~ AreaCode, data2) 
+# AreaCode를 factor로 변경한 후 다시 분산분석을 한다.
+
+PostHocTest(A1, method = "lsd") # Fisher LSD를 한다.
+
+```
+
+Fisher LSD의 결과를 사용하기에는 결과가 너무 뒤죽박죽이라 그래프 하나로 표현하기 어려웠다. 때문에, 가장 보수적인 Bonferroni 검정도 같이 진행했다.
+
+```{r}
+#| label: Bonferroni 검정
+# Bonferroni 검정
+
+PostHocTest(A1, method = "bonferroni") 
+```
+
+Bonferroni검정에 의하면 AreaCode = 5(Area = East Cambridge) 인 경우의 평균값만 나머지 그룹과 유의하게 다르다는 결과를 보여줬다. 이는 Fisher LSD의 결과보다는 검정력이 떨어지지만 가장 통계적으로 유의하기 때문에 Bonferroni 검정에 의한 결과를 사용하기로 했다. 
+
+"AreaCode = 5"와 "그 이외"로 나누는 카테고리가 두 개인 더미변수를 구성해보면
+
+```{r}
+#| label: 더미변수 만들기
+# 더미변수 만들기
+
+data2$AreaCodeM = ifelse(data2$AreaCode == 5, 1, 0)
+```
+
+```{r}
+#| label: AreaCodeM을 AreaCode대신 사용한 경우 효과 분석
+# AreaCodeM을 AreaCode대신 사용한 경우 효과 분석
+# M4 - AreaCode를 이용한 회귀분석
+M4 = lm(SalePrice ~ AreaCode, data2)
+M5 = lm(SalePrice ~ AreaCodeM, data2)
+summary(M4)
+```
+```{r}
+#| label: M5 - AreaCodeM 더미변수 사용시 결과
+# M5 - AreaCodeM 을 이용한 회귀분석 결과
+summary(M5)
+```
+
+M4(AreaCode를 이용한) 단순회귀분석시 $adj-R^2$
+```
+Adjusted R-squared:  0.1795
+```
+
+M5(AreaCodeM을 이용한) 단순회귀분석시 $adj-R^2$
+
+```
+Adjusted R-squared:  0.1617 
+```
+
+:::{.callout-note}
+SalePrice와 AreaCode의 분산분석 결과(Bonferroni 검정)를 통해 도출한 새로운 변수 AreaCodeM을 회귀분석에 활용했을 때, SalesPrice와의 단순회귀분석시 오히려 AreaCode를 사용한 것 보다 낮은 $adj-R^2$ 값을 보여줬다.
+:::

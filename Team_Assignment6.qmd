@@ -1,0 +1,550 @@
+---
+title: "통계자료분석 팀프로젝트 - Reyemes Affiar"
+author: "2023-2학기 통계자료분석 1조 김재현"
+date: "2023-12-06"
+date-modified: "2023-12-21"
+format: 
+  html:
+    mermaid: 
+      theme: neutral
+---
+
+```{r setup, include=FALSE}
+#| label: 사용할 패키지 불러오기
+
+# 사용할 패키지 불러오기
+library(readxl)
+library(dplyr)
+library(DescTools)
+library(agricolae)
+library(tidyverse)
+library(car)
+library(MASS)
+library(ggpubr)
+```
+
+```{r}
+#| label: 데이터 불러오기
+# 데이터 불러오기
+
+rawdata = read_excel("./Team_Assignment/Reyeme2.xls")
+data1 = as.data.frame(rawdata)
+data1$FirstDate = as.Date(as.numeric(as.character(data1$FirstDate)),origin="1899-12-30")
+data1$RC = as.factor(data1$RC)
+
+```
+
+```{r}
+#| label: 데이터 변수 클래스 확인
+
+str(data1)
+```
+
+
+```{r}
+#| label: 결측값 존재 확인
+# 결측값 존재 확인
+
+sum(is.na(data1))
+```
+
+:::{.callout-note}
+결측값 9개 존재.
+:::
+
+```{r}
+#| label: 결측값 있는 행 확인
+# 결측값 있는 행 확인
+
+which(rowSums(is.na(data1)) > 0)
+
+```
+
+:::{.callout-note}
+결측값 중 한개를 제외하곤 모두 UNIT 열 값이다. UNIT는 건물내 특정 주거공간을 나타내는 호수(ex 101호, 102호)이다. Reyem Affiar가 구매하려는 건물의 UNIT는 주어져있지 않기 때문에 Reyem Affiar가 구매하려는 건물 가격을 추정하는데에 UNIT 변수는 사용하지 않을 것으로 예상한다. 나머지 한개의 결측값은 First Date에서 나타났으며, 254행에 있다. FirstDate열은 사용할 예정이므로 254행만 제외한다.
+:::
+
+```{r}
+#| label: data2 = data1의 결측값 있는 행 중 254행 제거
+
+#결측값 있는 행 중 254행 제거
+
+data2 = data1[-254,]
+```
+
+```{r}
+#| label: data3 = data2의 Address 열 나누기 
+#| warning: false
+data3 <- separate(data2, Address, into = c("AddressNo", "AddressName", "Street"), sep = " ")
+```
+
+
+```{r}
+
+#| label: First Date를 연 월 일로 열 나누기
+
+data4 <- separate(data3, FirstDate, into = c("YearF", "MonthF", "DateF"), sep = "-")
+```
+
+## 분산분석 SalePrice와 Area
+
+### 등분산성 확인
+
+```{r}
+#| label: data4 그래프를 통한 등분산성 확인 - ggline
+ggpubr::ggline(data4, x = "Area", y = "SalePrice", add = c("mean_sd", "jitter"), 
+       title = "지역별 SalePrice", ylab ="SalePrice", xlab = "", ggtheme = theme_classic(base_family = "Noto Sans KR") )
+```
+
+plot상으로 봤을 때, Area별로 등분산성이 지켜지지 않고 있다.
+
+### 잔차가 정규분포인지 확인
+
+```{r}
+#| label: 먼저 분산분석 M1 정의
+
+M1 = aov(SalePrice ~ Area, data4)
+anova(M1)
+```
+
+Area에 따라 SalePrice가 달라진다는 사실은 확인되었다. (p값 = 3.487e-15 ***)
+
+```{r}
+#| label: M1 잔차분포 확인-정규성 검증
+
+plot(density(M1$residuals),xlab = "",main = "residual distribution", lwd = 2)
+```
+
+잔차는 오른쪽으로 긴 꼬리분포를 갖고 있다. 대칭성이 있다고 볼수 없다.
+
+그러므로 잔차분포가 정규분포에 가깝다고 판단하기 어렵다.
+
+비대칭도가 심하기 때문에 levene test로 등분산성에대한 검정을 진행한다.
+
+```{r}
+#| label: M1에 대한 leveneTest - 등분산성 검정
+
+car::leveneTest(M1) # 디폴트 center = median
+```
+
+p-value가 `6.854e-11 ***`로 귀무가설(등분산성을 만족한다.)를 강력하게 기각하고 있다.
+
+비모수검정?
+
+분산 안정화 변환?
+
+outlier 제거?
+
+outlier 제거 후 다시 등분산성 확인
+
+### outlier 제거
+
+```{r}
+#| label: boxplot 확인
+ri = M1$residuals
+boxplot(ri ~ data4$Area, xlab = "", ylab = "residuals", range= 1.5, boxwex = 0.4) # boxwex는 상자폭을 0.4배 줄이는 옵션
+```
+
+표준화 혹은 스튜던트화된 잔차는 평균0, 표준편차 1의 분포를 따라야 한다. 그러나 $\pm2$
+이상이라면, mild outlier, $\pm3$ 이상이라면 extreme outlier로 판단한다.
+
+```{r}
+#| label: 외적 스튜던트화된 잔차를 이용하여 outlier 확인
+
+outliers = abs(rstudent(M1))>2 # 외적 스튜던트화된 잔차의 절대값이 2이상이면 outlier로 판단.
+```
+
+```{r}
+#| label: data5 = data4의 outlier 제거
+
+data5 = data4[!outliers,] #outliers가 아닌 행들만 data5에 저장
+```
+
+22개 데이터 제거
+
+### 다시 분산분석 및 등분산성 확인
+
+```{r}
+#| label: data5를 이용한 분산분석 M2 정의
+
+M2 = aov(SalePrice ~ Area, data5)
+anova(M2)
+```
+
+```{r}
+#| label: M2 boxplot 확인
+ri = M2$residuals
+boxplot(ri ~ data5$Area, xlab = "", ylab = "residuals", range= 1.5, boxwex = 0.4) # boxwex는 상자폭을 0.4배 줄이는 옵션
+```
+
+
+
+```{r}
+#| label: data5의 등분산성 그래프 확인 ggline
+ggpubr::ggline(data5, x = "Area", y = "SalePrice", add = c("mean_sd", "jitter"), 
+       title = "지역별 SalePrice", ylab ="SalePrice", xlab = "", ggtheme = theme_classic(base_family = "Noto Sans KR") )
+```
+
+여전히 Area별로 분포가 크게 다른 것으로 보아 등분산성을 만족하지 않는 것으로 보인다.
+
+```{r}
+#| label: 잔차분포 확인 - 정규성 검증
+
+plot(density(M2$residuals),xlab = "",main = "residual distribution", lwd = 2)
+```
+
+이전과 비교하여 잔차의 분포가 조금 더 정규성을 띄는 것 처럼 보이나 여전히 비대칭에 가깝다.
+
+그러므로 levene test를 이용하여 등분산성을 검정한다.
+
+```{r}
+#| label: M2에 대한 leveneTest - 등분산성 검정
+
+car::leveneTest(M2) # 디폴트 center = median
+```
+
+이전 levene test에 의한 p값(`6.854e-11 ***`)보다는 p값이 증가하였으나 여전히 낮은 값으로 등분산성을 만족한다는 귀무가설을 기각하고 있다.
+
+
+```{r}
+#| label: data5의 boxplot 확인 
+ri = M2$residuals
+boxplot(ri ~ data5$Area, xlab = "", ylab = "residuals", range= 1.5, boxwex = 0.4) # boxwex는 상자폭을 0.4배 줄이는 옵션
+```
+여전히 극단값이 존재.
+
+이 극단값을 더 처리하는 방법
+
+#### 1. IQR 1.5 기준으로 다시 극단값 처음부터 처리(외적 스튜던트 잔차 사용하지 않고)
+
+```{r}
+#| label: 극단값 확인 IQR 1.5
+Lo = quantile(ri,0.25)-1.5*IQR(ri)
+Up = quantile(ri,0.75)+1.5*IQR(ri)
+outliers2 =ri[(ri<Lo) | (ri>Up)]
+outliers2
+```
+```{r}
+#| label: 극단값의 인덱스 추출
+outliers2_index = which((ri<Lo) | (ri>Up))
+```
+
+
+```{r}
+#| label:  data5M 은 data4에서 IQR 1.5를 넘어가는 극단값 제거
+data5M = data4[-outliers2_index,]
+```
+
+#### 다시 분산분석(M2M) 및 등분산성 확인 (data5M)
+
+```{r}
+#| label: data5M를 이용한 분산분석 M2 정의
+
+M2M = aov(SalePrice ~ Area, data5M)
+anova(M2M)
+```
+
+```{r}
+#| label: data5M의 등분산성 그래프 확인 ggline
+ggpubr::ggline(data5M, x = "Area", y = "SalePrice", add = c("mean_sd", "jitter"), 
+       title = "지역별 SalePrice", ylab ="SalePrice", xlab = "", ggtheme = theme_classic(base_family = "Noto Sans KR") )
+```
+
+```{r}
+#| label: data5M(분산분석모형:M2M) 잔차분포 확인 - 정규성 검증
+
+plot(density(M2M$residuals),xlab = "",main = "residual distribution", lwd = 2)
+```
+
+```{r}
+#| label: M2M에 대한 leveneTest - 등분산성 검정
+
+car::leveneTest(M2M) # 디폴트 center = median
+```
+
+오히려 외적스튜던트화된 잔차를 처리했을때 보다 좋지 않음
+
+#### 2. 극단값을 추가로 처리(강력한 외적 스튜던트화된 잔차 기준)
+
+```{r}
+#| label: outliers 3 = 외적 스튜던트화된 잔차(1이상)를 이용하여 outlier 확인
+
+outliers3 = abs(rstudent(M1))>1 # 외적 스튜던트화된 잔차의 절대값이 1이상이면 outlier로 판단.
+```
+
+```{r}
+#| label: data5MM = data4의 outlier 제거(외적 스튜던트화된 잔차 절대값 1이상)
+
+data5MM = data4[!outliers3,] #outliers가 아닌 행들만 data5MM에 저장
+```
+
+### data5MM 다시 분산분석 및 등분산성 확인
+
+```{r}
+#| label: data5MM를 이용한 분산분석 M2MM 정의
+
+M2MM = aov(SalePrice ~ Area, data5MM)
+anova(M2MM)
+```
+
+
+```{r}
+#| label: data5MM의 등분산성 그래프 확인 ggline
+ggpubr::ggline(data5MM, x = "Area", y = "SalePrice", add = c("mean_sd", "jitter"), 
+       title = "지역별 SalePrice", ylab ="SalePrice", xlab = "", ggtheme = theme_classic(base_family = "Noto Sans KR") )
+```
+
+여전히 Area별로 분포가 다른 것이 보이나 상당히 비슷해진것으로 보인다.
+
+```{r}
+#| label: M2MM의 잔차분포 확인 - 정규성 검증
+
+plot(density(M2MM$residuals),xlab = "",main = "residual distribution", lwd = 2)
+```
+
+이전과 비교하여 잔차의 분포가 조금 더 정규성을 띄는 것 처럼 보이나 여전히 비대칭에 가깝다.
+
+그러므로 levene test를 이용하여 등분산성을 검정한다.
+
+```{r}
+#| label: M2MM에 대한 leveneTest - 등분산성 검정
+
+car::leveneTest(M2MM) # 디폴트 center = median
+```
+
+M2의 levene test에 의한 p값(`0.02124`)보다는 p값이 증가하였으나 여전히 낮은 값으로 간신히 등분산성을 만족한다는 귀무가설을 기각하지 않고 있다.
+
+
+```{r}
+#| label: data5MM의 boxplot 확인 
+riMM = M2MM$residuals
+boxplot(riMM ~ data5MM$Area, xlab = "", ylab = "residuals", range= 1.5, boxwex = 0.4) # boxwex는 상자폭을 0.4배 줄이는 옵션
+```
+
+여전히 극단값이 몇개 확인된다.
+
+외적 스튜던트화된 잔차를 활용한 극단값 제거는 현재 조건(1이상)이 최대라 할 수 있다.
+
+여기서 추가로 outlier를 제거해보면
+
+```{r}
+#| label: data5MM의 잔차 riMM에서 1.5 IQR을 넘는 극단값 제거
+Lo = quantile(riMM,0.25)-1.5*IQR(riMM)
+Up = quantile(riMM,0.75)+1.5*IQR(riMM)
+outliersMM =riMM[(riMM<Lo) | (riMM>Up)]
+outliersMM
+```
+
+```{r}
+#| label: riMM 극단값의 인덱스 추출
+outliersMM_index = which((riMM<Lo) | (riMM>Up))
+```
+
+
+```{r}
+#| label:  data5MMM 은 data4에서 IQR 1.5를 넘어가는 극단값 제거
+data5MMM = data5MM[-outliersMM_index,]
+```
+
+#### 다시 분산분석(M2MMM) 및 등분산성 확인 (data5MMM)
+
+```{r}
+#| label: data5MMM를 이용한 분산분석 M2MMM 정의
+
+M2MMM = aov(SalePrice ~ Area, data5MMM)
+anova(M2MMM)
+```
+
+```{r}
+#| label: data5MMM의 등분산성 그래프 확인 ggline
+ggpubr::ggline(data5MMM, x = "Area", y = "SalePrice", add = c("mean_sd", "jitter"), 
+       title = "지역별 SalePrice", ylab ="SalePrice", xlab = "", ggtheme = theme_classic(base_family = "Noto Sans KR") )
+```
+
+```{r}
+#| label: data5MMM(분산분석모형:M2MMM) 잔차분포 확인 - 정규성 검증
+
+plot(density(M2MMM$residuals),xlab = "",main = "residual distribution", lwd = 2)
+```
+
+이정도면 거의 정규분포로 봐도 무방할 듯 하다. levene test와 bartlett test를 사용하여  등분산성 검정을 확인해보자.
+
+```{r}
+#| label: M2MMM에 대한 leveneTest - 등분산성 검정
+
+car::leveneTest(M2MMM) # 디폴트 center = median
+```
+
+```{r}
+#| label: M2MMM에 대한 bartlettTest - 등분산성 검정
+
+bartlett.test(SalePrice ~ Area, data5MMM)
+```
+
+
+:::{.callout-note}
+data5MM은 무려 데이터를 93개 즉, 전체 데이터의 20%를 극단값으로 처리하여 제거했지만 등분산성을 만족하지 못하였다. outlier 제거가 아닌 다른 방식을 찾아야 한다. 분산 안정화 변환 혹은 비모수검정을 사용하는 것이 좋을 듯 하다.
+:::
+
+### 분산안정화 변환
+
+```{r}
+#| label: slp()
+
+slp(M1)
+```
+
+결과 : `Suggested power transformation:  -0.9050363`
+
+역수변환
+
+```{r}
+#| label: data5T에 SalePrice 역수변환한 RSalePrice 변수 생성
+data5T = data4
+data5T$RSalePrice = 1/data4$SalePrice
+```
+
+```{r}
+#| label: data5T의 RSalePrice를 이용한 분산분석 M2T 정의
+
+M2T = aov(RSalePrice ~ Area, data5T)
+anova(M2T)
+```
+
+
+```{r}
+#| label: data5T의 등분산성 그래프 확인 ggline
+ggpubr::ggline(data5T, x = "Area", y = "RSalePrice", add = c("mean_sd", "jitter"), 
+       title = "지역별 SalePrice의 역수", ylab ="1/SalePrice", xlab = "", ggtheme = theme_classic(base_family = "Noto Sans KR") )
+```
+
+여전히 Area별로 분포가 크게 다른 것으로 보아 등분산성을 만족하지 않는 것으로 보인다.
+
+```{r}
+#| label: M2T 잔차분포 확인  - 정규성 검증
+
+plot(density(M2T$residuals),xlab = "",main = "residual distribution", lwd = 2)
+```
+
+이전과 비교하여 잔차의 분포가 조금 더 정규성을 띄는 것 처럼 보이나 여전히 비대칭에 가깝다.
+
+그러므로 levene test를 이용하여 등분산성을 검정한다.
+
+```{r}
+#| label: M2T에 대한 leveneTest - 등분산성 검정
+
+car::leveneTest(M2T) # 디폴트 center = median
+```
+
+여전히 등분산성을 만족하지 못하고 있다.
+
+```{r}
+#| label: M2T에 대한 bartlettTest - 등분산성 검정
+
+bartlett.test(RSalePrice ~ Area, data5T)
+```
+
+여전히 등분산성을 만족하지 못하고 있다.
+
+```{r}
+#| label: data5T의 boxplot 확인 
+riT = M2T$residuals
+boxplot(riT ~ data5T$Area, xlab = "", ylab = "residuals", range= 1.5, boxwex = 0.4) # boxwex는 상자폭을 0.4배 줄이는 옵션
+```
+
+극단값이 몇개 확인된다.
+
+outlier를 제거해보면
+
+```{r}
+#| label: data5T의 잔차 riT에서 1.5 IQR을 넘는 극단값 제거
+Lo = quantile(riT,0.25)-1.5*IQR(riT)
+Up = quantile(riT,0.75)+1.5*IQR(riT)
+outliersT =riT[(riT<Lo) | (riT>Up)]
+outliersT
+```
+
+```{r}
+#| label: riT의 극단값의 인덱스 추출
+outliersT_index = which((riT<Lo) | (riT>Up))
+```
+
+
+```{r}
+#| label:  data5TT 은 data5T에서 IQR 1.5를 넘어가는 극단값 제거
+data5TT = data5T[-outliersT_index,]
+```
+
+#### 다시 분산분석(M2TT) 및 등분산성 확인 (data5TT)
+
+```{r}
+#| label: data5TT를 이용한 분산분석 M2TT 정의
+
+M2TT = aov(RSalePrice ~ Area, data5TT)
+anova(M2TT)
+```
+
+```{r}
+#| label: data5TT의 등분산성 그래프 확인 ggline
+ggpubr::ggline(data5TT, x = "Area", y = "RSalePrice", add = c("mean_sd", "jitter"), 
+       title = "지역별 1/SalePrice", ylab ="1/SalePrice", xlab = "", ggtheme = theme_classic(base_family = "Noto Sans KR") )
+```
+
+```{r}
+#| label: data5TT(분산분석모형:M2TT) 잔차분포 확인 - 정규성 검증
+
+plot(density(M2TT$residuals),xlab = "",main = "residual distribution", lwd = 2)
+```
+
+이정도면 거의 정규분포로 봐도 무방할 듯 하다. levene test와 bartlett test를 사용하여  등분산성 검정을 확인해보자.
+
+```{r}
+#| label: M2TT에 대한 leveneTest - 등분산성 검정
+
+car::leveneTest(M2TT) # 디폴트 center = median
+```
+
+```{r}
+#| label: M2TT에 대한 bartlettTest - 등분산성 검정
+
+bartlett.test(RSalePrice ~ Area, data5TT)
+```
+
+#### 비모수검정
+
+```{r}
+#| label: 비모수검정 kruskal.test() - data4 사용
+
+kruskal.test(SalePrice ~ Area, data4)
+```
+
+```{r}
+#| label: Wilcoxon 검정 - 다중 비교 사후검정 (순위기반)
+#| warning: false
+
+pairwise.wilcox.test(data4$SalePrice, data4$Area,p.adjust.method = "none")
+```
+
+비모수 검정을 사용했지만 괜찮은 결과를 얻지 못했다. 결국 E 만 다른 그룹과 다르다는 결과를 얻었을 뿐이다. 
+
+외적 스튜던트화된 잔차(1.5이상)를 사용하여 outlier를 제거한 data5를 이용한 비모수 검정을 진행해보자.
+
+```{r}
+#| label: data5 - 비모수검정 kruskal.test()
+kruskal.test(SalePrice ~ Area, data4)
+```
+
+```{r}
+#| label: data5 - Wilcoxon 검정 - 다중 비교 사후검정 (순위기반)
+#| warning: false
+
+pairwise.wilcox.test(data5$SalePrice, data5$Area,p.adjust.method = "none")
+```
+위 결과를 이용하면
+
+그룹은 다음과 같이 묶을 수 있다.
+
+Zone1 - E
+Zone2 - C,CP,PS,SH
+Zone3 - AG,AH,FP,HS,K,M,N,NW,RA,RS,W
+

@@ -1,0 +1,231 @@
+---
+title: "통계자료분석 팀프로젝트 - Reyemes Affiar"
+author: "2023-2학기 통계자료분석 1조 김재현"
+date: "2023-12-06"
+date-modified: "2023-12-22"
+format: 
+  html:
+    mermaid: 
+      theme: neutral
+---
+
+```{r setup, include=FALSE}
+#| label: 사용할 패키지 불러오기
+
+# 사용할 패키지 불러오기
+library(readxl)
+library(dplyr)
+library(DescTools)
+library(agricolae)
+library(tidyverse)
+library(car)
+library(MASS)
+library(ggpubr)
+library(PerformanceAnalytics)
+```
+
+```{r}
+#| label: 데이터 불러오기
+# 데이터 불러오기
+
+rawdata = read_excel("./Team_Assignment/Reyeme2.xls")
+data1 = as.data.frame(rawdata)
+data1$FirstDate = as.Date(as.numeric(as.character(data1$FirstDate)),origin="1899-12-30")
+data1$RC = as.factor(data1$RC)
+data1$Area = as.factor(data1$Area)
+
+```
+
+```{r}
+#| label: 데이터 변수 클래스 확인
+
+str(data1)
+```
+
+
+```{r}
+#| label: 결측값 존재 확인
+# 결측값 존재 확인
+
+sum(is.na(data1))
+```
+
+:::{.callout-note}
+결측값 9개 존재.
+:::
+
+```{r}
+#| label: 결측값 있는 행 확인
+# 결측값 있는 행 확인
+
+which(rowSums(is.na(data1)) > 0)
+
+```
+
+:::{.callout-note}
+결측값 중 한개를 제외하곤 모두 UNIT 열 값이다. UNIT는 건물내 특정 주거공간을 나타내는 호수(ex 101호, 102호)이다. Reyem Affiar가 구매하려는 건물의 UNIT는 주어져있지 않기 때문에 Reyem Affiar가 구매하려는 건물 가격을 추정하는데에 UNIT 변수는 사용하지 않을 것으로 예상한다. 나머지 한개의 결측값은 First Date에서 나타났으며, 254행에 있다. FirstDate열은 사용할 예정이므로 254행만 제외한다.
+:::
+
+```{r}
+#| label: data2 = data1의 결측값 있는 행 중 254행 제거
+
+#결측값 있는 행 중 254행 제거
+
+data2 = data1[-254,]
+```
+
+```{r}
+#| label: data3 = data2의 Address 열 나누기 
+#| warning:false
+data3 <- separate(data2, Address, into = c("AddressNo", "AddressName", "Street"), sep = " ")
+data3$AddressNo = as.factor(data3$AddressNo)
+data3$AddressName = as.factor(data3$AddressName)
+data3$Street = as.factor(data3$Street)
+```
+
+
+```{r}
+
+#| label: First Date를 연 월 일로 열 나누기
+
+data4 <- separate(data3, FirstDate, into = c("YearF", "MonthF", "DateF"), sep = "-")
+data4$YearF = as.factor(data4$YearF)
+data4$MonthF = as.factor(data4$MonthF)
+data4$DateF = as.factor(data4$DateF)
+
+```
+
+### outlier 제거
+
+#### 외적 스튜던트 잔차를 이용한 극단값 제거
+
+표준화 혹은 스튜던트화된 잔차는 평균0, 표준편차 1의 분포를 따라야 한다. 그러나 $\pm2$
+이상이라면, mild outlier, $\pm3$ 이상이라면 extreme outlier로 판단한다.
+
+```{r}
+#| label: data4를 이용한 분산분석 모형 M1(SalePrice ~ Area)
+M1 = aov(SalePrice ~ Area, data4)
+```
+
+
+```{r}
+#| label: 외적 스튜던트화된 잔차를 이용하여 outlier 확인
+
+outliers = abs(rstudent(M1))>1.5 # 외적 스튜던트화된 잔차의 절대값이 1.5이상이면 outlier로 판단.
+```
+
+```{r}
+#| label: data5 = data4의 outlier 제거
+
+data5 = data4[!outliers,] #outliers가 아닌 행들만 data5에 저장
+```
+
+
+### 다시 분산분석 및 등분산성 확인
+
+```{r}
+#| label: data5를 이용한 분산분석 M2 정의
+
+M2 = aov(SalePrice ~ Area, data5)
+```
+
+```{r}
+#| label: Area변수의 수준별 숫자
+table(data5$Area)
+```
+
+분산분석시 안정적인 결과를 얻으려면 그룹별 반복수가 일정한 균형된 설계가 중요한데, Area 그룹에 따라서 반복수가 매우 다르다.
+
+잔차가 정규분포를 띄지도 않으며, outlier가 많이 보이기 때문에 비모수검정을 했다.
+
+```{r}
+#| label: data5 - 비모수검정 kruskal.test()
+kruskal.test(SalePrice ~ Area, data5)
+```
+
+```{r}
+#| label: data5 - Wilcoxon 검정 - 다중 비교 사후검정 (순위기반)
+#| warning: false
+
+pairwise.wilcox.test(data5$SalePrice, data5$Area,p.adjust.method = "none")
+```
+위 결과를 이용하면
+
+그룹은 다음과 같이 묶을 수 있다.
+
+1Zone - E
+2Zone - C,CP,PS,SH
+3Zone - AG,AH,FP,HS,K,M,N,NW,RA,RS,W
+
+
+```{r}
+#| label: data5에 Zone 열 만들기
+for(i in 1:nrow(data5)){
+  if(data5$Area[i] == "E"){
+    data5$Zone[i] = "1Zone"
+  } else if(data5$Area[i] == "C"|data5$Area[i] == "CP"|data5$Area[i] == "PS"|data5$Area[i] == "SH"){
+    data5$Zone[i] = "2Zone"
+  } else{
+    data5$Zone[i] = "3Zone"
+  }
+}
+data5$Zone = as.factor(data5$Zone)
+```
+
+```{r}
+#| label: Zone변수의 수준별 숫자
+table(data5$Zone)
+```
+
+```{r}
+#| label: data5, Zone 변수를 이용한 분산분석 M3 정의
+
+M3 = aov(SalePrice ~ Zone, data5)
+```
+
+```{r}
+#| label: 외적 스튜던트화된 잔차를 이용하여 outlier 확인
+
+outliers = abs(rstudent(M3))>1.5 # 외적 스튜던트화된 잔차의 절대값이 1.5이상이면 outlier로 판단.
+```
+
+```{r}
+#| label: data5 Zone 변수 분산분석 모형의 outlier 제거
+
+data5 = data5[!outliers,] #outliers가 아닌 행들만 data5에 저장
+```
+
+```{r}
+#| label: outlier제거 이후 Zone변수의 수준별 숫자
+table(data5$Zone)
+```
+
+```{r}
+#| label: LM1 = lm(SalePrice ~ Zone*Area, data5)
+LM1 = lm(SalePrice ~ Zone*Area, data5)
+summary(LM1)
+```
+
+Zone에 의해 Area가 설명할 수 있는 부분이 대부분 설명되어, Area변수의 통계적 유의성이 매우 떨어지는 모습을 보인다.
+
+Area 대신 Zone 변수를 사용해도 무방한 것으로 판단할 수 있다.
+
+```{r}
+levels(data5$YearF)
+```
+```{r}
+#| label: YearF변수의 수준별 개수
+table(data5$YearF)
+```
+
+```{r}
+#| label: LM2 = lm(SalePrice ~ Zone*Interior, data5)
+LM2 = lm(SalePrice ~ Interior * Zone* Days * YearF * Condo * Tax * RC , data5)
+summary(LM2)
+```
+
+
+
+
+
+
