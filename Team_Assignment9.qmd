@@ -1,0 +1,351 @@
+---
+title: "Outlier 제거"
+author: "2023-2학기 통계자료분석 1조 김재현"
+date: "2023-12-06"
+date-modified: "2023-12-22"
+format: 
+  html:
+    mermaid: 
+      theme: neutral
+---
+
+```{r setup, include=FALSE}
+#| label: 사용할 패키지 불러오기
+
+# 사용할 패키지 불러오기
+library(readxl)
+library(dplyr)
+library(DescTools)
+library(agricolae)
+library(tidyverse)
+library(car)
+library(MASS)
+library(ggpubr)
+library(PerformanceAnalytics)
+```
+
+```{r}
+#| label: 데이터 불러오기
+# 데이터 불러오기
+
+rawdata = read_excel("./Team_Assignment/Reyeme2.xls")
+data1 = as.data.frame(rawdata)
+data1$FirstDate = as.Date(as.numeric(as.character(data1$FirstDate)),origin="1899-12-30")
+data1$RC = as.factor(data1$RC)
+data1$Area = as.factor(data1$Area)
+
+```
+
+```{r}
+#| label: 데이터 변수 클래스 확인
+
+str(data1)
+```
+
+
+```{r}
+#| label: 결측값 존재 확인
+# 결측값 존재 확인
+
+sum(is.na(data1))
+```
+
+:::{.callout-note}
+결측값 9개 존재.
+:::
+
+```{r}
+#| label: 결측값 있는 행 확인
+# 결측값 있는 행 확인
+
+which(rowSums(is.na(data1)) > 0)
+
+```
+
+:::{.callout-note}
+결측값 중 한개를 제외하곤 모두 UNIT 열 값이다. UNIT는 건물내 특정 주거공간을 나타내는 호수(ex 101호, 102호)이다. Reyem Affiar가 구매하려는 건물의 UNIT는 주어져있지 않기 때문에 Reyem Affiar가 구매하려는 건물 가격을 추정하는데에 UNIT 변수는 사용하지 않을 것으로 예상한다. 나머지 한개의 결측값은 First Date에서 나타났으며, 254행에 있다. FirstDate열은 사용할 예정이므로 254행만 제외한다.
+:::
+
+```{r}
+#| label: data2 = data1의 결측값 있는 행 중 254행 제거
+
+#결측값 있는 행 중 254행 제거
+
+data2 = data1[-254,]
+```
+
+```{r}
+#| label: data3 = data2의 Address 열 나누기 
+#| warning: false
+data3 <- separate(data2, Address, into = c("AddressNo", "AddressName", "Street"), sep = " ")
+data3$AddressNo = as.factor(data3$AddressNo)
+data3$AddressName = as.factor(data3$AddressName)
+data3$Street = as.factor(data3$Street)
+```
+
+
+```{r}
+
+#| label: First Date를 연 월 일로 열 나누기
+
+data4 <- separate(data3, FirstDate, into = c("YearF", "MonthF", "DateF"), sep = "-")
+data4$YearF = as.factor(data4$YearF)
+data4$MonthF = as.factor(data4$MonthF)
+data4$DateF = as.factor(data4$DateF)
+
+```
+
+```{r}
+
+#| label: 평단가 PrPerI 만들기
+
+data4$PrPerI = data4$SalePrice/data4$Interior
+```
+
+```{r}
+
+#| label: Bed/Rooms = BedPerR, Bath/Rooms = BathPerR 만들기
+
+data4$BedPerR  = data4$Bed/data4$Rooms
+data4$BathPerR = data4$Bath/data4$Rooms
+```
+
+```{r}
+#| label: str(data4)
+
+str(data4)
+```
+
+### outlier 제거
+
+#### SalePrice ~ Area 분산분석 모형에서 IQR 1.5이상 극단값
+
+```{r}
+#| label: data4를 이용한 분산분석 모형 M1(SalePrice ~ Area)
+M1 = aov(PrPerI ~ Area, data4)
+ri = M1$residuals
+```
+
+```{r}
+#| label: M1(data4) outlier 확인
+
+ri = M1$residuals
+boxplot(ri ~ data4$Area, xlab = "", ylab = "residuals", range= 1.5, boxwex = 0.4) # boxwex는 상자폭을 0.4배 줄이는 옵션
+```
+
+```{r}
+#| label: data4의 잔차 ri에서 1.5 IQR을 넘는 극단값 확인
+Lo = quantile(ri,0.25)-1.5*IQR(ri)
+Up = quantile(ri,0.75)+1.5*IQR(ri)
+outliers =ri[(ri<Lo) | (ri>Up)]
+outliers
+```
+
+```{r}
+#| label: ri 극단값의 인덱스 추출 및 제거
+outliers_index = which((ri<Lo) | (ri>Up))
+data5 = data4[-outliers_index,]
+```
+
+31개 데이터 제거
+
+#### Days가 너무 긴 혹은 짧은 데이터 삭제
+
+```{r}
+#| label: Days변수의 boxplot 확인
+
+boxplot(data4$Days)
+```
+
+
+```{r}
+#| label: Days변수에서 1.5 IQR을 넘는 극단값 확인
+Lo = quantile(data4$Days,0.25)-1.5*IQR(data4$Days)
+Up = quantile(data4$Days,0.75)+1.5*IQR(data4$Days)
+outliers_days =data4$Days[(data4$Days<Lo) | (data4$Days>Up)]
+outliers_days
+```
+
+```{r}
+#| label: Days변수 극단값의 인덱스 추출 및 제거(data6)
+outliers_days_index = which((data4$Days<Lo) | (data4$Days>Up))
+data6 = data5[-outliers_days_index,]
+```
+
+23개 제거
+
+#### FirstDate에서 Year가 너무 다른 데이터 삭제
+
+```{r}
+#| label: YearF(FirstDate에서 연도만 추출) factor의 수준 확인
+levels(data4$YearF)
+```
+```{r}
+#| label: YearF 변수에서 1920년 매매 자료 확인
+outliers_YearF = data4$Days[data4$YearF=="1920"]
+outliers_YearF
+```
+
+```{r}
+#| label: YearF 변수에서 1920년 매매 자료 제거(data7)
+outliers_days_index = which(data4$YearF=="1920")
+data7 = data6[-outliers_days_index,]
+```
+
+1개 제거
+
+#### 너무 크거나 작은 면적(Interior) 제거
+
+```{r}
+#| label: Interior변수의 boxplot 확인
+
+boxplot(data4$Interior)
+```
+
+
+```{r}
+#| label: Interior변수에서 1.5 IQR을 넘는 극단값 확인
+Lo = quantile(data4$Interior,0.25)-1.5*IQR(data4$Interior)
+Up = quantile(data4$Interior,0.75)+1.5*IQR(data4$Interior)
+outliers_int =data4$Interior[(data4$Interior<Lo) | (data4$Interior>Up)]
+outliers_int
+```
+
+```{r}
+#| label: Interior변수 극단값의 인덱스 추출 및 제거(data8)
+outliers_int_index = which((data4$Interior<Lo) | (data4$Interior>Up))
+data8 = data7[-outliers_int_index,]
+```
+
+8개 제거
+
+#### Area 수준별 갯수 확인 10개 미만일경우 제거
+
+```{r}
+#| label: Area factor의 수준별 빈도수 확인
+table(data4$Area)
+```
+
+C,FP,NW,SH
+
+```{r}
+#| label: Area변수에서 C,FP,NW,SH 만 뽑아내기
+
+outliers_area =data4$Area[(data4$Area=="C") | (data4$Area=="FP") | (data4$Area=="NW") | (data4$Area=="SH")]
+outliers_area
+```
+
+```{r}
+#| label: Area변수 C,FP,NW,SH 인덱스 추출 및 제거(data9)
+outliers_area_index = which((data4$Interior<Lo) | (data4$Interior>Up))
+data9 = data8[-outliers_int_index,]
+```
+
+8개 제거
+
+#### RC 0,1 갯수 확인 (한쪽이 너무 적으면 제거)
+
+```{r}
+#| label: RC factor의 수준별 빈도수 확인
+table(data4$RC)
+```
+
+둘다 100개 이상의 데이터를 갖고 있으므로 한쪽 제거 안함
+
+#### 너무 크거나 작은 Tax 제거
+
+```{r}
+#| label: Tax 변수의 boxplot 확인
+
+boxplot(data4$Tax)
+```
+
+
+```{r}
+#| label: Tax변수에서 1.5 IQR을 넘는 극단값 확인
+Lo = quantile(data4$Tax,0.25)-1.5*IQR(data4$Tax)
+Up = quantile(data4$Tax,0.75)+1.5*IQR(data4$Tax)
+outliers_tax =data4$Tax[(data4$Tax<Lo) | (data4$Tax>Up)]
+outliers_tax
+```
+
+```{r}
+#| label: Interior변수 극단값의 인덱스 추출 및 제거(data10)
+outliers_tax_index = which((data4$Tax<Lo) | (data4$Tax>Up))
+dataA = data9[-outliers_tax_index,]
+```
+
+22개 제거
+
+
+#### 너무 크거나 작은 Condo 제거
+
+```{r}
+#| label: Condo 변수의 boxplot 확인
+
+boxplot(data4$Condo)
+```
+
+
+```{r}
+#| label: Condo변수에서 1.5 IQR을 넘는 극단값 확인
+Lo = quantile(data4$Condo,0.25)-1.5*IQR(data4$Condo)
+Up = quantile(data4$Condo,0.75)+1.5*IQR(data4$Condo)
+outliers_Condo =data4$Condo[(data4$Condo<Lo) | (data4$Condo>Up)]
+outliers_Condo
+```
+
+```{r}
+#| label: Interior변수 극단값의 인덱스 추출 및 제거(data10)
+outliers_Condo_index = which((data4$Condo<Lo) | (data4$Condo>Up))
+dataB = dataA[-outliers_Condo_index,]
+```
+
+36개 제거
+
+
+#### 너무 많거나 적은 Rooms 제거
+
+```{r}
+#| label: Rooms 변수의 boxplot 확인
+
+boxplot(data4$Rooms)
+```
+
+
+```{r}
+#| label: Rooms변수에서 1.5 IQR을 넘는 극단값 확인
+Lo = quantile(data4$Rooms,0.25)-1.5*IQR(data4$Rooms)
+Up = quantile(data4$Rooms,0.75)+1.5*IQR(data4$Rooms)
+outliers_Rooms =data4$Rooms[(data4$Condo<Lo) | (data4$Rooms>Up)]
+outliers_Rooms
+```
+
+```{r}
+#| label: Interior변수 극단값의 인덱스 추출 및 제거(data10)
+outliers_Rooms_index = which((data4$Rooms<Lo) | (data4$Rooms>Up))
+dataC = dataB[-outliers_Rooms_index,]
+```
+
+18개 제거
+
+#### 너무 많거나 적은 BED/Rooms = BedPerR 제거
+
+```{r}
+#| label: BedPerR 변수의 boxplot 확인
+
+boxplot(data4$BedPerR)
+```
+
+제거 x
+
+#### 너무 많거나 적은 BATH/Rooms 제거
+
+```{r}
+#| label: BedPerR 변수의 boxplot 확인
+
+boxplot(data4$BathPerR)
+```
+
+제거 x
+

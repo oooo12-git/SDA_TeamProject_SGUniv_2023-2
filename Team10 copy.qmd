@@ -1,0 +1,1131 @@
+---
+title: "outlier제거 및 지역별, 연도별 평단가 분산분석 + 다중회귀분석"
+author: "2023-2학기 통계자료분석 1조 김재현"
+date: "2023-12-06"
+date-modified: "2023-12-22"
+format: 
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+---
+
+```{r setup, include=FALSE}
+#| label: 사용할 패키지 불러오기
+
+# 사용할 패키지 불러오기
+library(readxl)
+library(dplyr)
+library(DescTools)
+library(agricolae)
+library(tidyverse)
+library(car)
+library(MASS)
+library(ggpubr)
+library(PerformanceAnalytics)
+library(gvlma)
+```
+
+## 데이터 불러오기 및 변수 정리
+
+```{r}
+#| label: 데이터 불러오기
+# 데이터 불러오기
+
+rawdata = read_excel("./Team_Assignment/Reyeme2.xls")
+data1 = as.data.frame(rawdata)
+data1$FirstDate = as.Date(as.numeric(as.character(data1$FirstDate)),origin="1899-12-30")
+data1$RC = as.factor(data1$RC)
+data1$Area = as.factor(data1$Area)
+
+```
+
+```{r}
+#| label: 데이터 변수 클래스 확인
+# 데이터 변수 클래스 확인
+
+str(data1)
+```
+
+
+```{r}
+#| label: 결측값 존재 확인
+# 결측값 존재 확인
+
+sum(is.na(data1))
+```
+
+:::{.callout-note}
+결측값 9개 존재.
+:::
+
+```{r}
+#| label: 결측값 있는 행 확인
+# 결측값 있는 행 확인
+
+which(rowSums(is.na(data1)) > 0)
+
+```
+
+:::{.callout-note}
+결측값 중 한개를 제외하곤 모두 UNIT 열 값이다. UNIT는 건물내 특정 주거공간을 나타내는 호수(ex 101호, 102호)이다. Reyem Affiar가 구매하려는 건물의 UNIT는 주어져있지 않기 때문에 Reyem Affiar가 구매하려는 건물 가격을 추정하는데에 UNIT 변수는 사용하지 않을 것으로 예상한다. 나머지 한개의 결측값은 First Date에서 나타났으며, 254행에 있다. FirstDate열은 사용할 예정이므로 254행만 제외한다.
+:::
+
+```{r}
+#| label: data2 = data1의 결측값 있는 행 중 254행 제거
+
+#결측값 있는 행 중 254행 제거
+
+data2 = data1[-254,]
+```
+
+```{r}
+#| label: data3 = data2의 Address 열 나누기 
+#| warning: false
+
+# data3 = data2의 Address 열 나누기 
+
+data3 <- separate(data2, Address, into = c("AddressNo", "AddressName", "Street"), sep = " ")
+data3$AddressNo = as.factor(data3$AddressNo)
+data3$AddressName = as.factor(data3$AddressName)
+data3$Street = as.factor(data3$Street)
+```
+
+
+```{r}
+
+#| label: First Date를 연 월 일로 열 나누기
+# First Date를 연 월 일로 열 나누기
+
+data4 <- separate(data3, FirstDate, into = c("YearF", "MonthF", "DateF"), sep = "-")
+data4$YearF = as.factor(data4$YearF)
+data4$MonthF = as.factor(data4$MonthF)
+data4$DateF = as.factor(data4$DateF)
+
+```
+
+```{r}
+
+#| label: 평단가 PrPerI 만들기
+# 평단가 PrPerI 만들기
+
+data4$PrPerI = data4$SalePrice/data4$Interior
+```
+
+```{r}
+
+#| label: Bed/Rooms = BedPerR, Bath/Rooms = BathPerR 만들기
+
+# Bed/Rooms = BedPerR, Bath/Rooms = BathPerR 만들기
+
+data4$BedPerR  = data4$Bed/data4$Rooms
+data4$BathPerR = data4$Bath/data4$Rooms
+```
+
+```{r}
+#| label: str(data4)
+
+str(data4)
+```
+
+## outlier 제거
+
+### SalePrice ~ Area 분산분석 모형에서 IQR 1.5이상 극단값
+
+```{r}
+#| label: data4를 이용한 분산분석 모형 M1(SalePrice ~ Area)
+# data4를 이용한 분산분석 모형 M1(SalePrice ~ Area)
+M1 = aov(PrPerI ~ Area, data4)
+ri = M1$residuals
+```
+
+```{r}
+#| label: M1(data4) outlier 확인
+# M1(data4) outlier 확인
+ri = M1$residuals
+boxplot(ri ~ data4$Area, xlab = "", ylab = "residuals", range= 1.5, boxwex = 0.4) # boxwex는 상자폭을 0.4배 줄이는 옵션
+```
+
+```{r}
+#| label: data4의 잔차 ri에서 1.5 IQR을 넘는 극단값 확인
+# data4의 잔차 ri에서 1.5 IQR을 넘는 극단값 확인
+Lo = quantile(ri,0.25)-1.5*IQR(ri)
+Up = quantile(ri,0.75)+1.5*IQR(ri)
+outliers =ri[(ri<Lo) | (ri>Up)]
+outliers
+```
+
+```{r}
+#| label: ri 극단값의 인덱스 추출 및 제거
+# ri 극단값의 인덱스 추출 및 제거
+outliers_index = which((ri<Lo) | (ri>Up))
+outliers_index
+data5 = data4[-outliers_index,]
+```
+
+31개 데이터 제거
+
+### Days가 너무 긴 혹은 짧은 데이터 삭제
+
+```{r}
+#| label: Days변수의 boxplot 확인
+# Days변수의 boxplot 확인
+boxplot(data5$Days)
+```
+
+
+```{r}
+#| label: Days변수에서 1.5 IQR을 넘는 극단값 확인
+# Days변수에서 1.5 IQR을 넘는 극단값 확인
+Lo = quantile(data5$Days,0.25)-1.5*IQR(data5$Days)
+Up = quantile(data5$Days,0.75)+1.5*IQR(data5$Days)
+outliers_days =data5$Days[(data5$Days<Lo) | (data5$Days>Up)]
+outliers_days
+```
+
+```{r}
+#| label: Days변수 극단값의 인덱스 추출 및 제거(data6)
+# Days변수 극단값의 인덱스 추출 및 제거(data6)
+outliers_days_index = which((data5$Days<Lo) | (data5$Days>Up))
+outliers_days_index
+data6 = data5[-outliers_days_index,]
+```
+
+22개 제거
+
+### FirstDate에서 Year가 너무 다른 데이터 삭제
+
+```{r}
+#| label: YearF(FirstDate에서 연도만 추출) factor의 수준 확인
+
+# YearF(FirstDate에서 연도만 추출) factor의 수준 확인
+levels(data4$YearF)
+```
+```{r}
+#| label: YearF 변수에서 1920년 매매 자료 확인
+# YearF 변수에서 1920년 매매 자료 확인
+outliers_YearF = data6$Days[data6$YearF=="1920"]
+outliers_YearF
+```
+
+```{r}
+#| label: YearF 변수에서 1920년 매매 자료 제거(data7)
+# YearF 변수에서 1920년 매매 자료 제거(data7)
+outliers_YearF_index = which(data6$YearF=="1920")
+data7 = data6[-outliers_YearF_index,]
+```
+
+1개 제거
+
+### 너무 크거나 작은 면적(Interior) 제거
+
+```{r}
+#| label: Interior변수의 boxplot 확인
+# Interior변수의 boxplot 확인
+ 
+boxplot(data7$Interior)
+```
+
+
+```{r}
+#| label: Interior변수에서 1.5 IQR을 넘는 극단값 확인
+# Interior변수에서 1.5 IQR을 넘는 극단값 확인
+Lo = quantile(data7$Interior,0.25)-1.5*IQR(data7$Interior)
+Up = quantile(data7$Interior,0.75)+1.5*IQR(data7$Interior)
+outliers_int =data7$Interior[(data7$Interior<Lo) | (data7$Interior>Up)]
+outliers_int
+```
+
+```{r}
+#| label: Interior변수 극단값의 인덱스 추출 및 제거(data8)
+# Interior변수 극단값의 인덱스 추출 및 제거(data8)
+outliers_int_index = which((data7$Interior<Lo) | (data7$Interior>Up))
+data8 = data7[-outliers_int_index,]
+```
+
+6개 제거
+
+### Area 수준별 갯수 확인 10개 미만일경우 제거
+
+```{r}
+#| label: Area factor의 수준별 빈도수 확인
+# Area factor의 수준별 빈도수 확인
+table(data8$Area)
+```
+
+C,FP,NW,SH
+
+```{r}
+#| label: Area변수에서 C,FP,NW,SH 만 뽑아내기
+# Area변수에서 C,FP,NW,SH 만 뽑아내기
+
+outliers_area =data8$Area[(data8$Area=="C") | (data8$Area=="FP") | (data8$Area=="NW") | (data8$Area=="SH")]
+outliers_area
+```
+
+```{r}
+#| label: Area변수 C,FP,NW,SH 인덱스 추출 및 제거(data9)
+# Area변수 C,FP,NW,SH 인덱스 추출 및 제거(data9)
+outliers_area_index = which((data8$Area=="C") | (data8$Area=="FP") | (data8$Area=="NW") | (data8$Area=="SH"))
+
+data9 = data8[-outliers_area_index,]
+```
+
+15개 제거
+
+### RC 0,1 갯수 확인 (한쪽이 너무 적으면 제거)
+
+```{r}
+#| label: RC factor의 수준별 빈도수 확인
+# RC factor의 수준별 빈도수 확인
+
+table(data9$RC)
+```
+
+둘다 100개 이상의 데이터를 갖고 있으므로 한쪽 제거 안함
+
+### 너무 크거나 작은 Tax 제거
+
+```{r}
+#| label: Tax 변수의 boxplot 확인
+# Tax 변수의 boxplot 확인
+
+boxplot(data9$Tax)
+```
+
+
+```{r}
+#| label: Tax변수에서 1.5 IQR을 넘는 극단값 확인
+
+# Tax변수에서 1.5 IQR을 넘는 극단값 확인
+
+Lo = quantile(data9$Tax,0.25)-1.5*IQR(data9$Tax)
+Up = quantile(data9$Tax,0.75)+1.5*IQR(data9$Tax)
+outliers_tax =data9$Tax[(data9$Tax<Lo) | (data9$Tax>Up)]
+outliers_tax
+```
+
+```{r}
+#| label: Tax변수 극단값의 인덱스 추출 및 제거(dataA)
+
+# Tax변수 극단값의 인덱스 추출 및 제거(dataA)
+
+outliers_tax_index = which((data9$Tax<Lo) | (data9$Tax>Up))
+dataA = data9[-outliers_tax_index,]
+```
+
+9개 제거
+
+
+### 너무 크거나 작은 Condo 제거
+
+```{r}
+#| label: Condo 변수의 boxplot 확인
+# Condo 변수의 boxplot 확인
+
+boxplot(data9$Condo)
+```
+
+
+```{r}
+#| label: Condo변수에서 1.5 IQR을 넘는 극단값 확인
+# Condo변수에서 1.5 IQR을 넘는 극단값 확인
+
+
+Lo = quantile(dataA$Condo,0.25)-1.5*IQR(dataA$Condo)
+Up = quantile(dataA$Condo,0.75)+1.5*IQR(dataA$Condo)
+outliers_Condo =dataA$Condo[(dataA$Condo<Lo) | (dataA$Condo>Up)]
+outliers_Condo
+```
+
+```{r}
+#| label: Condo변수 극단값의 인덱스 추출 및 제거(dataB)
+# Condo변수 극단값의 인덱스 추출 및 제거(dataB)
+
+
+outliers_Condo_index = which((dataA$Condo<Lo) | (dataA$Condo>Up))
+dataB = dataA[-outliers_Condo_index,]
+```
+
+9개 제거
+
+
+### 너무 많거나 적은 Rooms 제거
+
+```{r}
+#| label: Rooms 변수의 boxplot 확인
+# Rooms 변수의 boxplot 확인
+
+boxplot(dataB$Rooms)
+```
+
+
+```{r}
+#| label: Rooms변수에서 1.5 IQR을 넘는 극단값 확인
+# Rooms변수에서 1.5 IQR을 넘는 극단값 확인
+
+Lo = quantile(dataB$Rooms,0.25)-1.5*IQR(dataB$Rooms)
+Up = quantile(dataB$Rooms,0.75)+1.5*IQR(dataB$Rooms)
+outliers_Rooms =dataB$Rooms[(dataB$Rooms<Lo) | (dataB$Rooms>Up)]
+outliers_Rooms
+```
+
+```{r}
+#| label: Rooms 변수 극단값의 인덱스 추출 및 제거(dataC)
+# Rooms 변수 극단값의 인덱스 추출 및 제거(dataC)
+
+outliers_Rooms_index = which((dataB$Rooms<Lo) | (dataB$Rooms>Up))
+dataC = dataB[-outliers_Rooms_index,]
+```
+
+18개 제거
+
+### 너무 많거나 적은 BED/Rooms = BedPerR 제거
+
+```{r}
+#| label: BedPerR 변수의 boxplot 확인
+# BedPerR 변수의 boxplot 확인
+ 
+boxplot(dataC$BedPerR)
+```
+
+아웃라이어 보이지 않음 제거 x
+
+### 너무 많거나 적은 BATH/Rooms 제거
+
+```{r}
+#| label: BathPerR 변수의 boxplot 확인
+# BathPerR 변수의 boxplot 확인
+
+boxplot(dataC$BathPerR)
+```
+
+```{r}
+#| label: BathPerR변수에서 1.5 IQR을 넘는 극단값 확인
+# BathPerR변수에서 1.5 IQR을 넘는 극단값 확인
+
+Lo = quantile(dataC$BathPerR,0.25)-1.5*IQR(dataC$BathPerR)
+Up = quantile(dataC$BathPerR,0.75)+1.5*IQR(dataC$BathPerR)
+outliers_BathPerR =dataC$BathPerR[(dataC$BathPerR<Lo) | (dataC$BathPerR>Up)]
+outliers_BathPerR
+```
+
+```{r}
+#| label: BathPerR 변수 극단값의 인덱스 추출 및 제거(dataD)
+# BathPerR 변수 극단값의 인덱스 추출 및 제거(dataD)
+
+outliers_BathPerR_index = which((dataC$BathPerR<Lo) | (dataC$BathPerR>Up))
+dataD = dataC[-outliers_BathPerR_index,]
+```
+
+1개 제거
+
+### outlier 제거 결과
+
+:::{.callout-note}
+결과적으로 총 339개 관측치의 아래와 같은 데이터만 남았다.
+:::
+
+```{r}
+#| label: head(dataD)
+
+head(dataD)
+```
+
+
+
+
+## PrPerI ~ Area 분산분석(dataD)
+
+```{r}
+#| label: Area 변수 수준별 빈도수 확인
+# Area 변수 수준별 빈도수 확인
+
+table(dataD$Area)
+```
+
+```{r}
+#| label: dataD를 이용한 분산분석 M2 정의
+
+M2 = aov(PrPerI ~ Area, dataD)
+anova(M2)
+```
+
+Area의 모든 평균이 같다는 귀무가설을 기각했다.
+
+등분산성을 확인.
+
+```{r}
+#| label: M2(dataD) boxplot 확인
+ri = M2$residuals
+boxplot(ri ~ dataD$Area, xlab = "", ylab = "residuals", range= 1.5, boxwex = 0.4) # boxwex는 상자폭을 0.4배 줄이는 옵션
+```
+
+
+
+```{r}
+#| label: dataD의 등분산성 그래프 확인 ggline
+#| warning: false
+ggpubr::ggline(dataD, x = "Area", y = "PrPerI", add = c("mean_sd", "jitter"), 
+       title = "지역별 평단가", ylab ="PrPerI", xlab = "", ggtheme = theme_classic(base_family = "Noto Sans KR") )
+```
+
+여전히 Area별로 분포가 크게 다른 것으로 보아 등분산성을 만족하지 않는 것으로 보인다.
+
+```{r}
+#| label: M2(PrPerI ~ Area) 잔차분포 확인 - 정규성 검증
+
+plot(density(M2$residuals),xlab = "",main = "residual distribution", lwd = 2)
+```
+
+잔차의 분포가 상당히 정규성을 띄는 분포를 보인다. 
+
+그러므로 bartlett test를 이용하여 등분산성을 검정한다.
+
+```{r}
+#| label: M2에 대한 BartlettTest - 등분산성 검정
+
+bartlett.test(PrPerI ~ Area, dataD)
+```
+
+p값이(`0.0007043`) 등분산성을 만족한다는 귀무가설을 기각하고 있기 때문에 등분산성을 갖고 있다고 볼 수 없다.
+
+때문에 비모수검정을 진행한다.
+
+### 비모수검정
+
+```{r}
+#| label: 비모수검정 kruskal.test() - dataD 사용
+
+kruskal.test(PrPerI ~ Area, dataD)
+```
+
+p-value가 매우 작으므로 그룹간 차이가 존재하는 것으로 판단할 수 있다.
+
+사후검정, 다중비교를 진행한다.
+작은 차이라도 찾아내기 위해 fisher lsd 검정과 같이 개별 유의수준을 통제하는 방식으로 wilcoxon 검정을 사용한다.
+
+```{r}
+#| label: dataD Wilcoxon 검정 - 다중 비교 사후검정 (순위기반)
+#| warning: false
+# dataD Wilcoxon 검정 - 다중 비교 사후검정 (순위기반)
+
+pairwise.wilcox.test(dataD$PrPerI, dataD$Area, p.adjust.method = "none")
+```
+
+wilcoxon 검정을 기반으로 두 변수간 p값이 0.1 이하인 경우 붉은 타일이 나타나도록 했다.
+
+```{r}
+#| label: pairwise.wilcox.test 기반 타일플롯 그리기
+#| warning: false
+#| echo: false
+# pairwise.wilcox.test 기반 타일플롯 그리기
+
+
+result <- pairwise.wilcox.test(dataD$PrPerI, dataD$Area, p.adjust.method = "none")
+
+# 결과를 데이터 프레임으로 변환
+result_df <- as.data.frame(result$p.value)
+result_df$Comparison <- rownames(result_df)
+
+# 데이터 프레임 재구성
+result_df_long <- reshape2::melt(result_df, id.vars = "Comparison")
+names(result_df_long) <- c("Comparison1", "Comparison2", "p.value")
+
+# NA 제거
+result_df_long <- result_df_long[!is.na(result_df_long$p.value), ]
+
+result_df_long$color <- ifelse(result_df_long$p.value <= 0.1, "red", "blue")
+
+# 타일 플롯 생성
+ggplot(result_df_long, aes(x = Comparison1, y = Comparison2, fill = color)) +
+  geom_tile() +
+  scale_fill_identity() +
+  theme_minimal() +
+  labs(title = "Pairwise Wilcox Test P-Values", 
+       fill = "P-Value")
+  
+
+```
+
+```{r}
+#| label: Area 변수의 순서를 변경한 dataE
+
+# Area 변수의 순서를 변경한 dataE
+
+dataE = dataD
+# Area 변수의 순서를 변경
+dataE$Area <- factor(dataD$Area, levels = c("E","K","RA","AH", "HS","AG" ,"M","W","RS","PS","CP","N"))
+```
+
+```{r}
+#| label: dataE의 Area에 따른 지역별 평단가 ggline
+#| echo: false
+
+# ggline 함수를 사용하여 그래프 생성
+ggline(dataE, x = "Area", y = "PrPerI", add = c("mean_sd", "jitter"), 
+       title = "지역별 평단가", ylab ="PrPerI", xlab = "", 
+       ggtheme = theme_classic(base_family = "Noto Sans KR"))
+
+```
+### Area 분산분석 결과
+
+위 분산분석결과를 통해 평단가가 차이 나지 않는 지역을 묶은 새로운 Zone 변수 생성
+
+1Zone = "E"  
+2Zone = "K"  
+3Zone = "RA"  
+4Zone = "AH","HS"  
+5Zone = "AG","M","W","RS"  
+6Zone = "PS","CP"  
+7Zone = "N"  
+
+```{r}
+#| label: Zone 변수 추가한 dataF
+
+# Zone 변수 추가한 dataF
+
+dataF = dataE
+for(i in 1:nrow(dataF)){
+  if(dataF$Area[i] == "E"){
+    dataF$Zone[i] = "1Zone"
+    } 
+  else if(dataF$Area[i] == "K"){
+    dataF$Zone[i] = "2Zone"
+    } 
+  else if(dataF$Area[i] == "RA"){
+    dataF$Zone[i] = "3Zone"
+    } 
+  else if(dataF$Area[i] == "AH"|dataF$Area[i] == "HS"){
+    dataF$Zone[i] = "4Zone"
+    }
+  else if(dataF$Area[i] == "AG"|dataF$Area[i] == "M"|dataF$Area[i] == "W"|dataF$Area[i] == "RS"){
+    dataF$Zone[i] = "5Zone"
+    } 
+  else if(dataF$Area[i] == "PS"|dataF$Area[i] == "CP"){
+    dataF$Zone[i] = "6Zone"
+    }
+  else if(dataF$Area[i] == "N"){
+    dataF$Zone[i] = "7Zone"
+    } 
+}
+dataF$Zone = as.factor(dataF$Zone)
+```
+
+```{r}
+head(dataF)
+```
+
+## PrPerI ~ YearF 분산분석(dataF)
+
+```{r}
+#| label: dataF를 이용한 PrPerI ~ YearF분산분석 M3 정의
+# dataF를 이용한 PrPerI ~ YearF분산분석 M3 정의
+
+
+M3 = aov(PrPerI ~ YearF, dataF)
+anova(M3)
+```
+
+YearF에 따른 PrPerI의 모든 평균이 같다는 귀무가설을 기각했다.
+
+등분산성을 확인해보자.
+
+```{r}
+#| label: M3(dataF) 잔차 boxplot 확인
+ri = M3$residuals
+boxplot(ri ~ dataF$YearF, xlab = "", ylab = "residuals", range= 1.5, boxwex = 0.4) # boxwex는 상자폭을 0.4배 줄이는 옵션
+```
+
+
+
+```{r}
+#| label: dataF의 등분산성 그래프 확인 ggline
+#| warning: false
+ggpubr::ggline(dataF, x = "YearF", y = "PrPerI", add = c("mean_sd", "jitter"), 
+       title = "연도별 평단가", ylab ="PrPerI", xlab = "", ggtheme = theme_classic(base_family = "Noto Sans KR") )
+```
+
+여전히 Area별로 분포가 크게 다른 것으로 보아 등분산성을 만족하지 않는 것으로 보인다.
+
+```{r}
+#| label: 잔차분포 확인 - 정규성 검증
+
+plot(density(M3$residuals),xlab = "",main = "residual distribution", lwd = 2)
+```
+
+비교적 종모양을 띄고 있으나 비대칭이 Area 분산분석보다 심하므로, levene test를 하는 편이 좋아 보인다.
+
+```{r}
+#| label: M3(PrPerI ~ YearF)에 대한 leveneTest - 등분산성 검정
+
+car::leveneTest(M3) # 디폴트 center = median
+
+```
+
+등분산성을 만족하고 있다는 결과가 나왔으므로, 검정력이 좋은 Fisher의 LSD를 진행한다.
+
+### fisher LSD
+
+```{r}
+#| label: M3에 대한 fisher lsd 사후 검정
+result = DescTools::PostHocTest(M3,method = "lsd")
+result
+```
+
+```{r}
+#| label: M3에 대한 fisher lsd 사후 검정을 그래프로 나타냄
+plot(LSD.test(M3, "YearF", p.adj = "none"))
+```
+
+### 연도별 분산분석 결과
+
+위 분산분석결과를 통해 평단가가 차이 나지 않는 연도를 묶은(색깔별로 묶었음) 새로운 YearM 변수 생성
+
+"1994" = "1994"  
+"1989" = "1989"  
+"1990,93" = "1990","1993"  
+"1991,92" = "1991","1992"  
+
+```{r}
+#| label: YearM 변수 추가한 dataG
+# YearM 변수 추가한 dataG
+
+
+dataG = dataF
+for(i in 1:nrow(dataG)){
+  if(dataG$YearF[i] == "1994"){
+    dataG$YearM[i] = "1994"
+    } 
+  else if(dataG$YearF[i] == "1989"){
+    dataG$YearM[i] = "1989"
+    } 
+  else if(dataG$YearF[i] == "1990"|dataG$YearF[i] == "1993"){
+    dataG$YearM[i] = "1990,93"
+    }
+  else if(dataG$YearF[i] == "1991"|dataG$YearF[i] == "1992"){
+    dataG$YearM[i] = "1991,92"
+    }  
+}
+dataG$YearM = as.factor(dataG$YearM)
+```
+
+```{r}
+head(dataG)
+```
+
+## 다중회귀분석
+
+```{r}
+#| label: dataG 구조 확인
+# dataG 구조 확인
+str(dataG)
+```
+
+### 다중 회귀 모형 Fullmodel
+
+```
+# LM1 = 모든 변수 상호작용 고려한 다중 회귀 모형
+LM1 = lm(PrPerI ~ Interior * Zone * YearM * Days * Rooms * Bed * Bath * Condo * Tax * RC, dataG)
+```
+
+```
+# LM1의 MSE 확인
+
+F1 = anova(LM1)
+F1[218,3] # LM1의 MSE
+
+아래는 Fullmodel의 MSE
+[1] 267.9195
+```
+
+```
+# LM1을 활용한 Reyeme Affiar의 건물 가격 예측
+
+predict(LM1, newdata = data.frame(Interior = 1040, Zone = "5Zone",YearM = "1994", Days = 24, Rooms = 5, Bed = 2, Bath = 1, Condo = 175 , Tax = 1121 , RC = "1"), interval = "prediction") #Days 24일은 4월 11일 ~ 5월 4일(당일 구매시) 기간 계산
+#5Zone 은 건물이 위치한 Mid Cambridge(Area:M)의 Zone
+```
+
+**결과**
+
+```
+Warning: prediction from rank-deficient fit; attr(*, "non-estim") has doubtful cases
+
+     fit        lwr       upr
+1 -192707986 -686376546 300960573
+```
+
+다중공선성 때문인지 완전히 이상한 값이 나옴.
+
+### 다중 회귀 모형 - 단계별 선택법
+
+```{r}
+#| label: 상호작용을 고려하지 않은 LM2 다중회귀 모형
+# 상호작용을 고려하지 않은 LM2 다중회귀 모형
+
+LM2 = lm(PrPerI ~ Interior + Zone + YearM + Days + Rooms + Bed + Bath + Condo + Tax + RC, dataG)
+```
+
+```{r}
+#| label: LM2 다중회귀 모형의 MSE확인 579.6425
+# LM2 다중회귀 모형의 MSE확인
+
+F2 = anova(LM2)
+F2[11,3] # LM2의 MSE
+```
+
+```{r}
+#| label: LM2 다중회귀 모형의 model selection 단계별 선택법
+# LM2 다중회귀 모형의 model selection 단계별 선택법
+
+step = stepAIC(LM2, scope = list(upper = ~ Interior*Zone*YearM*Days * Rooms * Bed * Bath * Condo * Tax * RC, lower = ~1),direction="both",trace = FALSE )
+```
+```{r}
+#| label: LM2 다중회귀 모형의 model selection 단계별 선택법 결과
+# LM2 다중회귀 모형의 model selection 단계별 선택법 결과
+
+step$anova
+```
+
+```{r}
+#| label: 단계별 선택법에 의해 도출된 LM9
+# 단계별 선택법에 의해 도출된 LM9 
+
+LM9 =lm(PrPerI ~ Interior + Zone + YearM + Days + Rooms + Bed + Bath + 
+    Condo + Tax + RC + Rooms:Bath + Rooms:RC + Condo:RC + Interior:Tax + 
+    Rooms:Tax + Interior:Bed + Days:Tax,dataG)
+F9 = anova(LM9)
+F9[18,3] # MSE = 491.7824
+```
+### Reyeme Affiar의 건물 가격 예측
+
+```{r}
+#| label: stepAIC에 의한 LM9을 활용한 예측
+
+# LM9을 활용한 Reyeme Affiar의 건물 가격 예측
+
+pre = predict(LM9, newdata = data.frame(Interior = 1040, Zone = "5Zone",YearM = "1994", Days = 24, Rooms = 5, Bed = 2, Bath = 1, Condo = 175 , Tax = 1121 , RC = "1"), interval = "prediction") 
+#Days 24일은 4월 11일 ~ 5월 4일(당일 구매시) 기간 계산
+#5Zone 은 건물이 위치한 Mid Cambridge(Area:M)의 Zone
+pre
+```
+```{r}
+pre *1040
+```
+
+위 예측값은 SalePrice/Interior 이므로 Interior를 곱하면 아래와 같다.
+
+```{r}
+#| label: 신뢰구간의 길이
+226079-122660.6
+```
+
+```
+  fit      lwr      upr
+174369.7 122660.5 226078.9
+```
+## 다중공선성
+
+### LM9모형에 사용한 변수간 상관관계 확인(수치형 변수만)
+```{r}
+#| label: 수치형 변수만 있는 dataG_N
+dataG_N = dataG[,c("PrPerI","Interior","Days","Rooms","Bed","Bath","Condo","Tax")]
+```
+
+```{r}
+#| label: 변수간 상관관계 확인
+#| warning: false
+chart.Correlation(dataG_N)
+```
+
+Interior - Rooms  
+Rooms - Bed  
+Interior - Bed  
+Tax - Interior
+
+위 변수간에 상관관계가 특히 높다. 
+
+LM9 다중회귀모형의 회귀계수를 살펴보자.
+
+```{r}
+LM9$coefficients
+```
+
+5Zone, 1994년, RC=1 일 경우
+Zone의 Reference Group = 1Zone
+YearM의 Reference Group = 1989
+
+$$평단가 = 431.71 -0.083Interior -38.74(5Zone=1) -12.31(1994년=1) -0.103Days -29.56Rooms + 9.26Bed-133.6Bath+0.09167Condo +0.001469Tax-52.16RC(=1)+27.74 Rooms:Bath + 13.75Rooms:RC1 -0.09195 Condo:RC1 + 0.00004934 Interior:Tax -0.008451Rooms:Tax -0.01386Interior:Bed +  0.00003257 Days:Tax $$
+Interior(-0.083) Rooms(-29.56)와 Bath(-133)의 회귀계수 부호 이상함 
+
+```{r}
+F9 # LM9 회귀모형의 분산분석
+```
+
+Bath의 p값이 `0.2695135`으로 매우 높음.
+
+다중공선성으로 인해 왜곡되고 있는 것일 수도 있으나, Rooms:Bath 상호작용항으로 인해 Bath의 p값이 올라갔을 수도 있다.
+
+```{r}
+vif(LM9)
+```
+
+GVIF(Generalized Variance Inflation Factor)^(1/(2*Df)) 또한 `8.038997`으로 높은 상태이다.
+
+Bath를 제거한 다중회귀분석 결과를 보고 Bath를 제거할지 결정한다.
+
+```{r}
+#| label: LMA = LM9에서 Bath 변수 제거 
+LMA =lm(PrPerI ~ Interior + Zone + YearM + Days + Rooms + Bed +  
+    Condo + Tax + RC + Rooms:RC + Condo:RC + Interior:Tax + 
+    Rooms:Tax + Interior:Bed + Days:Tax,dataG)
+FA = anova(LMA)
+FA[16,3] # MSE = 541.5598
+```
+
+MSE는 높아진 상태이다.
+
+LMA 다중회귀모형의 회귀계수를 살펴보자.
+
+```{r}
+LMA$coefficients
+```
+
+5Zone, 1994년, RC=1 일 경우
+Zone의 Reference Group = 1Zone
+YearM의 Reference Group = 1989
+
+$$평단가 = 322 -0.12Interior -51(5Zone=1) -18(1994년=1) -0.11Days +5.7Rooms + -1.2Bed+0.04Condo -0.0022Tax-35RC(=1) + 9.1Rooms:RC1 -0.044 Condo:RC1 + 0.00005 Interior:Tax -0.0078Rooms:Tax +0.007Interior:Bed +  0.000035 Days:Tax $$
+Rooms 회귀계수 +5.7로 납득 가능한 회귀계수 부호 확인
+
+Interior(-0.12) Bed(-1.2), Tax(-0.0022) 회귀계수 부호 이상함
+
+```{r}
+FA # LMA 회귀모형의 분산분석
+```
+
+Interior의 p값 `3.939e-11 ***`
+
+Rooms의 p값 `0.4104540`
+
+Bed의 p값 `0.1760735`
+
+Tax의 p값 `9.234e-07 ***`
+
+```{r}
+vif(LMA)
+```
+
+Vif값은 Interior, Rooms와 Bed가 비슷하고 Tax가 더 크다.
+
+종합했을 때, 회귀계수 부호가 이상하고, p값과 vif 모두 큰 Bed변수를 추가로 제거하는 편이 나을거라 판단한다.
+
+```{r}
+#| label: LMB = LMA에서 Bed 변수 제거 
+LMB =lm(PrPerI ~ Interior + Zone + YearM + Days + Rooms  +  
+    Condo + Tax + RC + Rooms:RC + Condo:RC + Interior:Tax + 
+    Rooms:Tax + Days:Tax, dataG)
+FB = anova(LMB)
+FB[14,3] # MSE = 542.9674(소폭 상승)
+```
+
+```{r}
+LMB$coefficients
+```
+
+5Zone, 1994년, RC=1 일 경우
+Zone의 Reference Group = 1Zone
+YearM의 Reference Group = 1989
+
+$$평단가 = 322 -0.12Interior -53(5Zone=1) -19(1994년=1) -0.11Days +3.1Rooms +0.036Condo -0.0061Tax -36RC(=1) + 9.3Rooms:RC1 -0.033 Condo:RC1 + 0.00005 Interior:Tax -0.0079Rooms:Tax +  0.000032 Days:Tax $$
+
+Interior(-0.12) 와 Tax(-0.0061)의 회귀계수 부호 이상하다. 
+
+```{r}
+FB # LMB 회귀모형의 분산분석
+```
+
+Interior와 Tax의 p값은 모두 낮다. 
+
+```
+              Df Sum Sq Mean Sq F value    Pr(>F)
+Rooms          1    368   367.9  0.6775 0.4110567    
+```
+
+Rooms 의 p값이 굉장히 높다. 그러나, 이는 상호작용항에 의한 것일 수 있다. (Rooms:RC, Rooms:Tax)
+
+```{r}
+vif(LMB)
+```
+
+Rooms의 VIF(5.341995)가 약간 높다.
+
+Rooms 변수를 제외한 모델과 제외하지 않은 모델의 비교를 통해 정하는 편이 나을 것이다.
+
+```{r}
+#| label: LMC = LMB에서 Rooms 변수 제거 
+LMC =lm(PrPerI ~ Interior + Zone + YearM + Days  +  
+    Condo + Tax + RC + Condo:RC + Interior:Tax + Days:Tax, dataG)
+FC = anova(LMC)
+FC[11,3] # MSE = 556.9496(소폭 상승)
+```
+
+```{r}
+LMC$coefficients
+```
+
+5Zone, 1994년, RC=1 일 경우
+Zone의 Reference Group = 1Zone
+YearM의 Reference Group = 1989
+
+$$평단가 = 304 -0.088Interior -56(5Zone=1) -13(1994년=1) -0.10Days + 0.053Condo -0.0017Tax +8.1RC(=1) +  -0.055 Condo:RC1 + 0.00003 Interior:Tax +  0.000032 Days:Tax $$
+
+Interior(-0.088) 와 Tax(-0.0017), RC(+8.1)의 회귀계수 부호 이상하다. 
+
+```{r}
+FC # LMB 회귀모형의 분산분석
+```
+
+Interior와 Tax의 p값은 모두 낮다. 
+
+```
+              Df Sum Sq Mean Sq F value    Pr(>F)
+Rooms          1    368   367.9  0.6775 0.4110567    
+```
+
+Rooms 의 p값이 굉장히 높다. 그러나, 이는 상호작용항에 의한 것일 수 있다. (Rooms:RC, Rooms:Tax)
+
+```{r}
+vif(LMC)
+```
+
+Rooms의 VIF(5.341995)가 약간 높다.
+
+```{r}
+#| label: LMD = LMC에서 Condo 변수 제거 
+LMD =lm(PrPerI ~ Interior + Zone + YearM + Days + Tax + RC + Interior:Tax + Days:Tax, dataG)
+FD = anova(LMD)
+FD[9,3] # MSE = 555.9376(소폭 하락)
+```
+
+```{r}
+LMD$coefficients
+```
+
+5Zone, 1994년, RC=1 일 경우
+Zone의 Reference Group = 1Zone
+YearM의 Reference Group = 1989
+
+$$평단가 = 319 -0.09Interior -61(5Zone=1) -14(1994년=1) -0.11Days -0.018Tax -7RC(=1) + 0.00003 Interior:Tax +  0.000032 Days:Tax $$
+
+Interior(-0.088) 와 Tax(-0.0017), RC(+8.1)의 회귀계수 부호 이상하다. 
+
+```{r}
+FD # LMB 회귀모형의 분산분석
+```
+
+Interior와 Tax의 p값은 모두 낮다. 
+
+```
+              Df Sum Sq Mean Sq F value    Pr(>F)
+Rooms          1    368   367.9  0.6775 0.4110567    
+```
+
+Rooms 의 p값이 굉장히 높다. 그러나, 이는 상호작용항에 의한 것일 수 있다. (Rooms:RC, Rooms:Tax)
+
+```{r}
+vif(LMD)
+```
+
+Rooms의 VIF(5.341995)가 약간 높다.
+
+```{r}
+#| label: LME = LMD에서 RC 변수, Days:Tax  제거 
+LME =lm(PrPerI ~ Interior + Zone + YearM + Days + Tax + Interior:Tax , dataG)
+FE = anova(LME)
+FE[7,3] # MSE = 556.9658(소폭 상승)
+```
+
+```{r}
+LME$coefficients
+```
+
+5Zone, 1994년, RC=1 일 경우
+Zone의 Reference Group = 1Zone
+YearM의 Reference Group = 1989
+
+$$평단가 = 311 -0.08Interior -62(5Zone=1) -17(1994년=1) -0.06Days -0.011Tax + 0.00003 Interior:Tax $$
+
+Interior(-0.088) 와 Tax(-0.0017), RC(+8.1)의 회귀계수 부호 이상하다. 
+
+```{r}
+FE # LMB 회귀모형의 분산분석
+```
+
+Interior와 Tax의 p값은 모두 낮다. 
+
+```
+              Df Sum Sq Mean Sq F value    Pr(>F)
+Rooms          1    368   367.9  0.6775 0.4110567    
+```
+
+Rooms 의 p값이 굉장히 높다. 그러나, 이는 상호작용항에 의한 것일 수 있다. (Rooms:RC, Rooms:Tax)
+
+```{r}
+vif(LME)
+```
+
+Rooms의 VIF(5.341995)가 약간 높다.
+
+
+
+### 다중공선성 제거 후 Reyeme Affiar의 건물 가격 예측
+
+```{r}
+#| label: 다중공선성 제거한 LMB을 활용한 예측
+
+# LMB을 활용한 Reyeme Affiar의 건물 가격 예측
+
+pre2 = predict(LMB, newdata = data.frame(Interior = 1040, Zone = "5Zone",YearM = "1994", Days = 24, Rooms = 5, Bed = 2, Bath = 1, Condo = 175 , Tax = 1121 , RC = "1"), interval = "prediction") 
+#Days 24일은 4월 11일 ~ 5월 4일(당일 구매시) 기간 계산
+#5Zone 은 건물이 위치한 Mid Cambridge(Area:M)의 Zone
+pre2
+```
+```{r}
+pre2 * 1040
+```
+
+```{r}
+#| label: LMB를 사용한 예측에서의 신뢰구간의 길이
+221962.7 - 113528.8
+```
+
+```{r}
+#| label: 다중공선성 제거한 LMB을 활용한 예측
+
+# LME을 활용한 Reyeme Affiar의 건물 가격 예측
+
+pre3 = predict(LME, newdata = data.frame(Interior = 1040, Zone = "5Zone",YearM = "1994", Days = 24, Rooms = 5, Bed = 2, Bath = 1, Condo = 175 , Tax = 1121 , RC = "1"), interval = "prediction") 
+#Days 24일은 4월 11일 ~ 5월 4일(당일 구매시) 기간 계산
+#5Zone 은 건물이 위치한 Mid Cambridge(Area:M)의 Zone
+pre3
+```
+```{r}
+pre3 * 1040
+```
+
+```{r}
+#| label: LMB를 사용한 예측에서의 신뢰구간의 길이
+221596.1 - 112300.3
+```
+
+
+## 잔차분석
+
+```{r}
+gvlma::gvlma(LMB)
+```
+
+```{r}
+gvlma::gvlma(LME)
+```
