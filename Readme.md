@@ -71,7 +71,13 @@ Reyeme Affiar는 건물을 구매하려 한다. 해당 건물에 대한 방 갯�
         
 - ex) House Price Index의 회귀계수는 1000으로 House Price Index가 클수록, 매매가 클 것이라는 예상에 부합하는 회귀계수이다.
 
-### 4. 회귀 계수 도출(위 결과 참조)
+### 4. 회귀 계수 도출
+
+Typing하여 작성시 검색 노출이 우려되어 손글씨 캡쳐본으로 대신함.
+
+캡쳐본의 위 영역은 모든 회귀계수를 나열한 식, 아래 영역은 주요 변수별로 회귀계수를 정리한 것
+
+![](./images/coefficient.jpeg)
 
 ## End of Document
 
